@@ -11,12 +11,36 @@ This repository provides the source code for our geometry-guided framework desig
 2. **Two-Stage CIELAB Refinement:** Eliminates residual luminance inconsistencies in the CIELAB color space.
 3. **Distance-Weighted Blending:** Fuses multi-view textures seamlessly to eliminate stitching artifacts and ensure high-fidelity visual smoothness.
 
-## Environmental Requirements
-To run this pipeline, please ensure your environment meets the following dependencies:
-* C++ 14 or higher / Python 3.8+
-* OpenCV (for image processing and color space conversions)
-* Eigen3 (for matrix operations and linear transformations)
-* *(If using Python)*: `numpy`, `opencv-python`, `trimesh`
+## 🛠️ Environmental Requirements & Dependencies
+
+This project is developed and tested strictly in a **Windows 10/11 (x64)** environment. Due to the stringent dependency chain of 3D point cloud processing and hardware interfacing, please ensure your environment is configured with the exact library versions listed below to guarantee reproducibility.
+
+### 1. Compiler & Build System
+* **IDE:** Microsoft Visual Studio 2022
+* **Toolchains:** MSVC v143 (with backward compatibility components installed for `vc14` binaries)
+* **CMake:** >= 3.20
+
+### 2. Core 3D Processing Library (Strict Versioning)
+* **PCL (Point Cloud Library) == 1.12.1**
+  * *Crucial Note:* To prevent ABI incompatibilities and CMake linking errors, your PCL 1.12.1 installation MUST be built against the following specific 3rd-party versions:
+    * **Boost == 1.78.0**
+    * **VTK == 9.1.0**
+    * **FLANN == 1.9.1**
+    * **Qhull == 2020.2**
+    * **Eigen3 == 3.3.9**
+
+### 3. Computer Vision & Machine Learning
+* **OpenCV >= 4.5.4** (Pre-built binaries for `vc14`/`vc15`)
+* **dlib >= 19.22** (Compiled with AVX instruction set support for accelerated facial landmark extraction)
+
+### 4. Graphics & Visualization
+* **GLFW == 3.3.8** (Compiled for `vc2022`)
+* **GLUT == 3.7.6**
+* **OpenGL** (Native Windows support)
+
+### 5. Hardware Acquisition (Optional)
+* **DkamSDK (Release_x64):** Proprietary Depth Camera SDK. 
+  * *Reproducibility Note:* This SDK is tightly coupled with our custom binocular hardware rig. Reviewers and researchers focusing on the algorithmic contributions (color correction & texture fusion) can safely bypass this dependency. We have provided an offline execution mode that directly ingests the standard `.obj` and `.png` files provided in the `demo/` folder.
 
 ## Core Parameters
 * `alpha`: Weighting coefficient for the distance-based blending strategy.
