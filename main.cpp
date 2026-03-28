@@ -1,3 +1,512 @@
+//// ********** 点云分割出人脸 ********** int width2 = 695;
+	int height2 = 805;
+
+	int lx = 1086;
+	int ly = 555;
+	int rx = 761;
+	int ry = 516;
+
+		Eigen::Matrix4f ICP_r;
+	ICP_r << 0.999788, 0.00293547, 0.0206364, -4.85643,
+		-0.0122719, 0.883161, 0.468913, -321.119,
+		-0.0168488, -0.469065, 0.883007, 85.4711,
+		0, 0, 0, 1;
+
+	//// ********** 点云分割出人脸 ********** //增加冗余空间
+	float padding = 120.0f;
+	lx = lx - padding;
+	ly = ly - padding;
+	rx = rx - padding;
+	ry = ry - padding;
+	width2 = width2 + 2 * padding;
+	height2 = height2 + 2 * padding;
+
+	// 提取目标图像
+	cv::Mat targetImage3 = imread("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/rgb_face_roi_l.png");
+	cv::Mat targetImage4 = imread("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/rgb_face_roi_r.png");
+
+	// 加载68点模型
+	dlib::shape_predictor shapePredictor;
+	dlib::deserialize("C:/Users/tester/Desktop/FaceStitche/shape_predictor_68_face_landmarks.dat") >> shapePredictor;
+
+	// Mat 转 dlib 图像
+	dlib::cv_image<dlib::bgr_pixel> dlibLeftImage(targetImage3);
+	dlib::cv_image<dlib::bgr_pixel> dlibRightImage(targetImage4);
+
+	// 检测器
+	dlib::frontal_face_detector detector = dlib::get_frontal_face_detector();
+
+	// 检测人脸
+	std::vector<dlib::rectangle> leftDetections = detector(dlibLeftImage);
+	std::vector<dlib::rectangle> rightDetections = detector(dlibRightImage);
+
+	// 提取左图 ROI（左眼、嘴唇）
+	if (!leftDetections.empty()) {
+		dlib::full_object_detection shape = shapePredictor(dlibLeftImage, leftDetections[0]);
+		leftEyeROI = extractROI(shape, { 36,37,38,39,40,41 }); // 左眼
+		lipsROI = extractROI(shape, { 48,49,50,51,52,53,54,55,56,57,58,59,
+										 60,61,62,63,64,65,66,67 }); // 嘴唇
+	}
+
+	// 提取右图 ROI（右眼）
+	if (!rightDetections.empty()) {
+		dlib::full_object_detection shape = shapePredictor(dlibRightImage, rightDetections[0]);
+		rightEyeROI = extractROI(shape, { 42,43,44,45,46,47 });
+	}
+
+	//取出点云cloud
+	pcl::PolygonMesh mesh;
+	pcl::io::loadPLYFile("DataSave/OrgData/mesh.ply", mesh);
+	PointCloud::Ptr cloud(new PointCloud);
+	pcl::fromPCLPointCloud2(mesh.cloud, *cloud);
+
+	//// 从之前保存的 CSV 文件读取点数据
+	//std::string csvFile = "DataSave/OrgData/mesh_points.csv";
+	//std::ifstream csv(csvFile);
+	//if (!csv.is_open()) {
+	//	std::cerr << "无法打开 CSV 文件: " << csvFile << std::endl;
+	//	return 1;
+	//}
+
+	//std::vector<SimplePoint> previousPoints;
+	//std::string line;
+	//// 跳过 CSV 头部（假设头部是 "x,y,z"）
+	//std::getline(csv, line);
+	//while (std::getline(csv, line)) {
+	//	float x, y, z;
+	//	if (sscanf(line.c_str(), "%f,%f,%f", &x, &y, &z) == 3) {
+	//		previousPoints.push_back({ x, y, z });
+	//	}
+	//	else {
+	//		std::cerr << "CSV 行解析失败: " << line << std::endl;
+	//	}
+	//}
+	//csv.close();
+
+	//// 比对当前 cloud 和之前 CSV 中的点
+	//compareClouds(cloud, previousPoints);
+
+	//后面纹理坐标部分的参数
+	float rate = 1.0;// 宽保留比
+	const int col = height2;
+	const int row = width2 * rate * 2;
+
+	// 定义变量保存拼接后的图像
+	Mat stitchedImage(height2, width2 * rate * 2, CV_8UC3);
+	// 左右矩形各一半（各占 rate）
+	Mat leftROI = stitchedImage(Rect(0, 0, width2 * rate, height2));
+	Mat rightROI = stitchedImage(Rect(width2 * rate, 0, width2 * rate, height2));
+	//提前拼接需要用到的stitchedImage
+	targetImage3(Rect(0, 0, width2 * rate, height2)).copyTo(leftROI);
+	targetImage4(Rect(width2 * (1.0 - rate), 0, width2 * rate, height2)).copyTo(rightROI);
+
+	// 继续后续的旋转和保存操作...
+	stitchedImage = RGB90right(stitchedImage);
+
+	cv::imwrite("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/stitchedImage.png", stitchedImage);
+
+
+
+
+	// 存储所有符合条件的点的索引
+	std::vector<size_t> candidate_indices;
+	std::vector<size_t> sampled_indices;
+
+	for (size_t i = 0; i < cloud->points.size(); ++i)
+	{
+		const auto& point = cloud->points[i];
+		//if (point.y > -85.0 && point.y < -10.0)
+		if (point.y > -120.0 && point.y < 20)
+		{
+			candidate_indices.push_back(i);
+		}
+	}
+
+	//// 初始化随机数生成器
+	//std::random_device rd;
+	//std::mt19937 gen(25);  // 固定种子，保证结果可复现；如果要真正随机可写成 std::mt19937 gen(rd());
+
+	//// 设置要采样的点数
+	//const size_t num_to_sample = 300;
+	//size_t num_available_points = candidate_indices.size();
+
+	//if (num_available_points >= num_to_sample)
+	//{
+	//	for (size_t i = 0; i < num_to_sample; ++i)
+	//	{
+	//		std::uniform_int_distribution<size_t> dist(i, num_available_points - 1);
+	//		size_t j = dist(gen);
+	//		std::swap(candidate_indices[i], candidate_indices[j]);
+	//	}
+
+	//	// 这里不要再写类型名，直接赋值给外部的 sampled_indices
+	//	sampled_indices.assign(candidate_indices.begin(),
+	//		candidate_indices.begin() + num_to_sample);
+	//}
+	//size_t num_available = sampled_indices.size();
+	//std::cout << "\n个数:" << num_available << std::endl;
+
+	// 权重
+	float w_eyes = 3.0f;
+	float w_lips = 2.0f;
+	float w_skin = 1.0f;
+	const size_t num_to_sample = 300;
+
+	// 储存 ROI
+	std::vector<size_t> eyes_indices;
+	std::vector<size_t> lips_indices;
+	std::vector<size_t> skin_indices;
+
+	// 左右脸特征点颜色
+	std::vector<cv::Vec3b> leftFeatures;
+	std::vector<cv::Vec3b> rightFeatures;
+	std::vector<cv::Point> leftPoints;
+	std::vector<cv::Point> rightPoints;
+
+	struct PointData {
+		float x, y, z;
+		float left_u, left_v;
+		int left_x, left_y;
+		float right_u, right_v;
+		int right_x, right_y;
+	};
+
+	//// 收集当前计算的数据
+	//std::vector<PointData> currentPoints;
+
+	//// 遍历随机选择的索引
+	//for (size_t k = 0; k < sampled_indices.size(); ++k)
+	//{
+	//	// 获取随机选取的索引
+	//	size_t i = candidate_indices[k];
+
+	//	// 使用索引 i 访问点云中的点
+	//	const auto& point = cloud->points[i];
+
+	//	// 1. 计算左脸纹理坐标（用于获取颜色）
+	//	PointT liftpoint_left = pointright2lift(point, ICP_r);
+	//	Point2f left_uv = Point2RGBXY(1944, 2592, liftpoint_left, 0);
+	//	float left_u = (left_uv.x - (1944 - height2 - ly)) / col;
+	//	float left_v = 1.00 - (left_uv.y - lx) / row;
+
+	//	int left_x = static_cast<int>(left_uv.x - (1944 - height2 - ly));
+	//	int left_y = static_cast<int>(left_uv.y - lx);
+
+	//	// 2. 计算右脸纹理坐标（用于获取颜色）
+	//	Point2f right_uv = Point2RGBXY(1944, 2592, point, 1);
+	//	float right_u = (right_uv.x - (1944 - height2 - ry)) / col;
+	//	float right_v = 1.00 - ((right_uv.y + width2 * rate - rx)) / row;
+
+	//	int right_x = static_cast<int>(right_uv.x - (1944 - height2 - ry));
+	//	int right_y = static_cast<int>(right_uv.y + width2 * rate - rx);
+
+	//	// 收集当前点数据
+	//	currentPoints.push_back({ point.x, point.y, point.z, left_u, left_v, left_x, left_y, right_u, right_v, right_x, right_y });
+
+
+	//	// 4. 获取左右脸原始颜色,写入消色差数组
+	//	Vec3b left_color = stitchedImage.at<Vec3b>(
+	//		min(max(left_y, 0), stitchedImage.rows - 1),
+	//		min(max(left_x, 0), stitchedImage.cols - 1)
+	//	);
+	//	// 使用 push_back() 将颜色和坐标添加到 vector 的末尾
+	//	leftFeatures.push_back(left_color);
+	//	leftPoints.push_back(cv::Point(left_x, left_y));
+
+	//	Vec3b right_color = stitchedImage.at<Vec3b>(
+	//		min(max(right_y, 0), stitchedImage.rows - 1),
+	//		min(max(right_x, 0), stitchedImage.cols - 1)
+	//	);
+	//	rightFeatures.push_back(right_color);
+	//	rightPoints.push_back(cv::Point(right_x, right_y));
+	//}
+
+	// ------------------ Step1: 分类候选点 ------------------
+	for (size_t idx : candidate_indices) {
+		const auto& point = cloud->points[idx];
+		// 左相机纹理坐标
+		PointT liftpoint_left = pointright2lift(point, ICP_r);
+		Point2f left_uv = Point2RGBXY(1944, 2592, liftpoint_left, 0);
+		float left_u = (left_uv.x - (1944 - height2 - ly)) / col;
+		float left_v = 1.00f - (left_uv.y - lx) / row;
+		int left_x = static_cast<int>(left_uv.x - (1944 - height2 - ly));
+		int left_y = static_cast<int>(left_uv.y - lx);
+
+		if (isInEyes(left_x, left_y)) {
+			eyes_indices.push_back(idx);
+		}
+		else if (isInLips(left_x, left_y)) {
+			lips_indices.push_back(idx);
+		}
+		else {
+			skin_indices.push_back(idx);
+		}
+	}
+
+	// 打印分类数量方便调试
+	std::cout << "分类结果: Eyes=" << eyes_indices.size()
+		<< " Lips=" << lips_indices.size()
+		<< " Skin=" << skin_indices.size() << std::endl;
+
+	// ------------------ Step2: 按比例确定各类目标数 ------------------
+	size_t target_total = 400; // 你之前的总样本目标
+
+	// 用可用候选点数与 target_total 取较小者作为此次“全部采样点”
+	size_t effective_total = std::min(target_total, candidate_indices.size());
+
+	// 按比例计算各类配额（整数下取整，余数归皮肤）
+	size_t target_eyes = effective_total / 10;            // 1/10
+	size_t target_lips = (effective_total * 7) / 30;     // 7/30
+	// 皮肤拿余数，保证三者之和等于 effective_total
+	size_t target_skin = effective_total - target_eyes - target_lips;
+
+	// 随机发生器（固定种子，结果可复现）
+	std::mt19937 gen(194350);
+
+	// Fisher–Yates 区域随机采样（与你原来一致）
+	auto region_sample = [&](std::vector<size_t>& src, size_t n) {
+		std::vector<size_t> out;
+		if (src.size() <= n) {
+			out = src; // 数量不足直接返回全部
+		}
+		else {
+			for (size_t i = 0; i < n; ++i) {
+				std::uniform_int_distribution<size_t> dist(i, src.size() - 1);
+				size_t j = dist(gen);
+				std::swap(src[i], src[j]);
+			}
+			out.assign(src.begin(), src.begin() + n);
+		}
+		return out;
+		};
+
+	// ------------------ Step3 + Step4：优先保证眼睛满额，然后嘴巴，最后皮肤补齐 ------------------
+	std::vector<size_t> eyes_sampled = region_sample(eyes_indices, target_eyes);
+
+	// 眼睛不足，用 lips 补
+	size_t eye_short = (target_eyes > eyes_sampled.size()) ? (target_eyes - eyes_sampled.size()) : 0;
+	if (eye_short > 0 && !lips_indices.empty()) {
+		auto lips_fill = region_sample(lips_indices, std::min(eye_short, lips_indices.size()));
+		eyes_sampled.insert(eyes_sampled.end(), lips_fill.begin(), lips_fill.end());
+
+		// 从 lips 中移除这批补给，避免后面重复
+		std::unordered_set<size_t> used_lips_fill(lips_fill.begin(), lips_fill.end());
+		lips_indices.erase(
+			std::remove_if(lips_indices.begin(), lips_indices.end(),
+				[&](size_t id) { return used_lips_fill.count(id); }),
+			lips_indices.end()
+		);
+		eye_short -= lips_fill.size();
+	}
+
+	// 仍不足，用 skin 补
+	if (eye_short > 0 && !skin_indices.empty()) {
+		auto skin_fill = region_sample(skin_indices, std::min(eye_short, skin_indices.size()));
+		eyes_sampled.insert(eyes_sampled.end(), skin_fill.begin(), skin_fill.end());
+
+		std::unordered_set<size_t> used_skin_fill(skin_fill.begin(), skin_fill.end());
+		skin_indices.erase(
+			std::remove_if(skin_indices.begin(), skin_indices.end(),
+				[&](size_t id) { return used_skin_fill.count(id); }),
+			skin_indices.end()
+		);
+		// eye_short -= skin_fill.size(); // 到这步为止，即使不足，也会在最后用剩余皮肤补齐总量
+	}
+
+	// 采样 lips（用剩余 lips，目标为按比例计算出的 target_lips）
+	auto lips_sampled = region_sample(lips_indices, target_lips);
+
+	// 用皮肤把总量补到 effective_total
+	size_t already = eyes_sampled.size() + lips_sampled.size();
+	size_t need_skin = (effective_total > already) ? (effective_total - already) : 0;
+	auto skin_sampled = region_sample(skin_indices, need_skin);
+
+	// 合并
+	sampled_indices.reserve(eyes_sampled.size() + lips_sampled.size() + skin_sampled.size());
+	sampled_indices.insert(sampled_indices.end(), eyes_sampled.begin(), eyes_sampled.end());
+	sampled_indices.insert(sampled_indices.end(), lips_sampled.begin(), lips_sampled.end());
+	sampled_indices.insert(sampled_indices.end(), skin_sampled.begin(), skin_sampled.end());
+
+	// 打印配额与实际抽样数量
+	std::cout << "比例配额: total=" << effective_total
+		<< " target(Eyes=" << target_eyes
+		<< ", Lips=" << target_lips
+		<< ", Skin~=" << target_skin << ")\n";
+
+	std::cout << "实际抽样数量: " << sampled_indices.size()
+		<< "  眼睛=" << eyes_sampled.size()
+		<< "  嘴唇=" << lips_sampled.size()
+		<< "  皮肤=" << skin_sampled.size()
+		<< std::endl;
+
+	// ------------------ Step5: 收集采样点数据 ------------------
+	std::vector<PointData> currentPoints;
+	for (size_t k = 0; k < sampled_indices.size(); ++k) {
+		size_t i = sampled_indices[k]; // ✅ 用采样后的索引
+
+		const auto& point = cloud->points[i];
+
+		// 左相机纹理坐标
+		PointT liftpoint_left = pointright2lift(point, ICP_r);
+		Point2f left_uv = Point2RGBXY(1944, 2592, liftpoint_left, 0);
+		float left_u = (left_uv.x - (1944 - height2 - ly)) / col;
+		float left_v = 1.00f - (left_uv.y - lx) / row;
+		int left_x = static_cast<int>(left_uv.x - (1944 - height2 - ly));
+		int left_y = static_cast<int>(left_uv.y - lx);
+
+		// 右相机纹理坐标
+		Point2f right_uv = Point2RGBXY(1944, 2592, point, 1);
+		float right_u = (right_uv.x - (1944 - height2 - ry)) / col;
+		float right_v = 1.00f - ((right_uv.y + width2 * rate - rx)) / row;
+		int right_x = static_cast<int>(right_uv.x - (1944 - height2 - ry));
+		int right_y = static_cast<int>(right_uv.y + width2 * rate - rx);
+
+		currentPoints.push_back({ point.x, point.y, point.z,
+								   left_u, left_v, left_x, left_y,
+								   right_u, right_v, right_x, right_y });
+
+		// 两边颜色
+		cv::Vec3b left_color = stitchedImage.at<cv::Vec3b>(
+			std::min(std::max(left_y, 0), stitchedImage.rows - 1),
+			std::min(std::max(left_x, 0), stitchedImage.cols - 1)
+		);
+		leftFeatures.push_back(left_color);
+		leftPoints.push_back(cv::Point(left_x, left_y));
+
+		cv::Vec3b right_color = stitchedImage.at<cv::Vec3b>(
+			std::min(std::max(right_y, 0), stitchedImage.rows - 1),
+			std::min(std::max(right_x, 0), stitchedImage.cols - 1)
+		);
+		rightFeatures.push_back(right_color);
+		rightPoints.push_back(cv::Point(right_x, right_y));
+	}
+
+
+	// 计算每个特征点的颜色差异（欧氏距离）
+	std::vector<float> colorDiffs;
+	for (size_t i = 0; i < leftFeatures.size(); i++)
+	{
+		cv::Vec3b left = leftFeatures[i];
+		cv::Vec3b right = rightFeatures[i];
+		// 计算BGR三个通道的欧氏距离
+		float diff = std::sqrt(
+			std::pow(left[0] - right[0], 2) +
+			std::pow(left[1] - right[1], 2) +
+			std::pow(left[2] - right[2], 2)
+		);
+		colorDiffs.push_back(diff);
+	}
+
+	
+	
+
+	// 计算颜色差异的均值
+	float meanDiff = 0.0f;
+	for (float diff : colorDiffs)
+	{
+		meanDiff += diff;
+	}
+	meanDiff /= colorDiffs.size();
+
+	// 筛选出正常点（差异小于2倍均值）
+	std::vector<cv::Vec3b> filteredLeftFeatures;
+	std::vector<cv::Vec3b> filteredRightFeatures;
+	std::vector<cv::Point> filteredLeftPoints;
+	std::vector<cv::Point> filteredRightPoints;
+	std::vector<int> filteredIndices;
+
+	for (size_t i = 0; i < leftFeatures.size(); i++)
+	{
+		if (colorDiffs[i] <= 1.0f * meanDiff) {
+			filteredLeftFeatures.push_back(leftFeatures[i]);
+			filteredRightFeatures.push_back(rightFeatures[i]);
+			filteredLeftPoints.push_back(leftPoints[i]);
+			filteredRightPoints.push_back(rightPoints[i]);
+			filteredIndices.push_back(i + 20);
+			// 实际特征点索引
+		}
+	}
+	//### 可视化筛选后的点
+	// 1. 创建用于可视化的画布
+	Mat visualizedImage = stitchedImage.clone();
+
+	// 2. 遍历并绘制筛选后的点
+	// 你可以绘制 leftPoints 和 rightPoints
+	// 绘制 leftPoints
+	for (const auto& p : filteredLeftPoints) {
+		// 在可视化的图像上绘制一个绿色的圆圈来标记这个
+		cv::circle(visualizedImage, p, 3, cv::Scalar(255, 0, 0), -1);
+	}
+	for (const auto& p : filteredRightPoints) {
+		// 在可视化的图像上绘制一个绿色的圆圈来标记这个点
+		cv::circle(visualizedImage, p, 3, cv::Scalar(255, 0, 0), -1);
+
+	}
+
+	cv::imwrite("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/Visualized_Points.png", visualizedImage);
+
+	// ### 额外添加全量可视化（不筛选）
+	visualizedImage = stitchedImage.clone();
+
+	for (const auto& p : leftPoints) {
+		cv::circle(visualizedImage, p, 3, cv::Scalar(255, 0, 0), -1); // 蓝色-左图
+	}
+	for (const auto& p : rightPoints) {
+		cv::circle(visualizedImage, p, 3, cv::Scalar(0, 255, 0), -1); // 绿色-右图
+	}
+
+	cv::imwrite("sampled_points_all.jpg", visualizedImage);
+	// 打印筛选结果
+	std::cout << "\n特征点颜色差异分析:" << std::endl;
+	std::cout << "平均颜色差异: " << meanDiff << std::endl;
+	std::cout << "筛选阈值: " << 3.0f * meanDiff << std::endl;
+	std::cout << "原始特征点数量: " << leftFeatures.size() << std::endl;
+	std::cout << "筛选后特征点数量: " << filteredLeftFeatures.size() << std::endl;
+	std::cout << "剔除异常点数量: " << leftFeatures.size() - filteredLeftFeatures.size() << std::endl;
+
+
+
+	// 保存原始左脸图像，因为变换会修改图像
+	cv::Mat originalLeftImage = targetImage3.clone();
+
+	// ===== 阶段1：矩阵 M 校正 =====
+	Eigen::Matrix3f M = compute_color_transform(filteredLeftFeatures, filteredRightFeatures);
+	std::cout << "色彩变换矩阵 M:\n" << M << std::endl;
+
+	// 1) 整图乘矩阵（你原逻辑）
+	targetImage3 = apply_color_transform(targetImage3.clone(), M);
+
+	// 2) 逐点生成“矩阵后的左侧颜色”用于评估 & 后续 Reinhard 输入
+	std::vector<cv::Vec3b> transformedFeatures_M;   // 矩阵后的点颜色
+	transformedFeatures_M.reserve(filteredLeftFeatures.size());
+
+	float meanDiff_M = 0.0f;
+	for (size_t i = 0; i < filteredLeftFeatures.size(); ++i)
+	{
+		const cv::Vec3b origLeft = filteredLeftFeatures[i];
+		const cv::Vec3b targetRight = filteredRightFeatures[i];
+
+		Eigen::Vector3f v(origLeft[0], origLeft[1], origLeft[2]); // BGR
+		Eigen::Vector3f u = M * v;
+
+		cv::Vec3b out(
+			cv::saturate_cast<uchar>(u[0]),
+			cv::saturate_cast<uchar>(u[1]),
+			cv::saturate_cast<uchar>(u[2])
+		);
+		transformedFeatures_M.push_back(out);
+
+		float d = std::sqrt(
+			std::pow(float(out[0]) - targetRight[0], 2) +
+			std::pow(float(out[1]) - targetRight[1], 2) +
+			std::pow(float(out[2]) - targetRight[2], 2)
+		);
+		meanDiff_M += d;
+	}
+	meanDiff_M /= static_cast<float>(filteredLeftFeatures.size());
+	std::cout << "矩阵变换后平均颜色差: " << meanDiff_M << std::endl;
+
+
 	/************************************** 点云配准 *****************************************************/
 // 初始化参数
 	cam_lift_ = cam_lift;
@@ -15,9 +524,7 @@
 	leftPoints.clear();
 	rightPoints.clear();
 
-	//// ********** 点云分割出人脸 ********** 
-
-	int width2 = 686;
+	//// ********** 点云分割出人脸 ********** int width2 = 686;
 	int height2 = 952;
 
 	int lx = 1025;
@@ -31,10 +538,7 @@
 	-0.00292825, -0.488499, 0.872565, 89.3636,
 	0, 0, 0, 1;
 
-	//// ********** 点云分割出人脸 ********** 
-
-
-			//增加冗余空间
+	//// ********** 点云分割出人脸 ********** //增加冗余空间
 	float padding = 120.0f;
 	lx = lx - padding;
 	ly = ly - padding;
@@ -406,6 +910,32 @@
 	cv::min(srcCh[0], 100.0, srcCh[0]);
 	cv::max(srcCh[0], 0.0, srcCh[0]);
 
+	// ===== 【论文代码补全】阶段2.5：局部动态 Gamma 校正 (Eq.7 & Eq.8) =====
+	// 参数设定参考论文 Table 1
+	int window_size = 51;
+	float beta = 0.3f;
+	float epsilon = 1e-6f;
+
+	cv::Mat mu_W;
+	// 计算局部窗口均值 mu_W(x,y)
+	cv::boxFilter(srcCh[0], mu_W, CV_32F, cv::Size(window_size, window_size), 
+                  cv::Point(-1, -1), true, cv::BORDER_REPLICATE);
+
+	for (int r = 0; r < srcCh[0].rows; ++r) {
+		float* L_ptr = srcCh[0].ptr<float>(r);
+		const float* mu_W_ptr = mu_W.ptr<float>(r);
+		for (int c = 0; c < srcCh[0].cols; ++c) {
+			float local_mean = mu_W_ptr[c];
+			// 依据 Eq.7 计算每个像素的 gamma 值
+			float gamma_xy = std::pow((local_mean + epsilon) / (static_cast<float>(mu_T) + epsilon), beta);
+
+			// 依据 Eq.8 应用 gamma (OpenCV L通道32F范围为0-100，需先归一化到0-1)
+			float L_norm = L_ptr[c] / 100.0f;
+			L_ptr[c] = std::pow(L_norm, gamma_xy) * 100.0f;
+		}
+	}
+	// ===== 局部动态 Gamma 校正结束 =====
+
 	cv::merge(srcCh, labSrc);
 
 	cv::Mat targetImage3_reinhard32f;
@@ -543,91 +1073,22 @@
 		}
 	}
 
-
-	//// =============== 打印详细的颜色信息（对照论文三阶段逻辑） ===============
-	//std::cout << "\n特征点颜色对比 (格式: BGR):\n";
-	//// M = Matrix, F = Final (Reinhard + Gamma)
-	//std::cout << "索引 | 原始颜色差 | 变换后(M)差 | 最终(F)差   | 左原BGR | 左(M)后BGR | 最终(F)后BGR | 右目标BGR\n";
-	//std::cout << "-------------------------------------------------------------------------------------------------------------\n";
-
-	//for (size_t i = 0; i < filteredLeftFeatures.size(); ++i)
-	//{
-	//	int idx = (i < filteredIndices.size() ? filteredIndices[i] : int(i));
-	//	const cv::Vec3b origLeft = filteredLeftFeatures[i];
-	//	const cv::Vec3b left_M = transformedFeatures_M[i];
-	//	const cv::Vec3b left_F = transformedFeatures_Final[i]; // 修正：使用 Final 标识符
-	//	const cv::Vec3b rightRef = filteredRightFeatures[i];
-
-	//	float origDiff = (i < colorDiffs.size()) ? colorDiffs[i] : euclid_bgr(origLeft, rightRef);
-	//	const float diff_M = euclid_bgr(left_M, rightRef);
-	//	const float diff_F = euclid_bgr(left_F, rightRef);
-
-	//	std::printf("%4d | %12.1f | %12.1f | %12.1f | (%3d,%3d,%3d) | (%3d,%3d,%3d) | (%3d,%3d,%3d) | (%3d,%3d,%3d)\n",
-	//		idx, origDiff, diff_M, diff_F,
-	//		origLeft[0], origLeft[1], origLeft[2],
-	//		left_M[0], left_M[1], left_M[2],
-	//		left_F[0], left_F[1], left_F[2],
-	//		rightRef[0], rightRef[1], rightRef[2]
-	//	);
-	//}
-
-	//// =============== ΔE 评估：原始 vs 右、矩阵后 vs 右、最终精修后 vs 右 ===============
-	//{
-	//	const size_t N = filteredLeftFeatures.size();
-	//	if (N > 0) {
-	//		std::vector<double> dE76_before, dE76_after_M, dE76_after_Final;
-	//		std::vector<double> dE00_before, dE00_after_M, dE00_after_Final;
-
-	//		for (size_t i = 0; i < N; ++i) {
-	//			const cv::Vec3f LabL = BGRu8_to_Lab32f(filteredLeftFeatures[i]);   // 原始
-	//			const cv::Vec3f LabR = BGRu8_to_Lab32f(filteredRightFeatures[i]);  // 目标
-	//			const cv::Vec3f LabLM = BGRu8_to_Lab32f(transformedFeatures_M[i]);  // 阶段1: Matrix
-	//			const cv::Vec3f LabLF = BGRu8_to_Lab32f(transformedFeatures_Final[i]); // 阶段2: R+G
-
-	//			dE76_before.push_back(deltaE76(LabL, LabR));
-	//			dE76_after_M.push_back(deltaE76(LabLM, LabR));
-	//			dE76_after_Final.push_back(deltaE76(LabLF, LabR));
-
-	//			dE00_before.push_back(deltaE2000(LabL, LabR));
-	//			dE00_after_M.push_back(deltaE2000(LabLM, LabR));
-	//			dE00_after_Final.push_back(deltaE2000(LabLF, LabR));
-	//		}
-
-	//		auto print_stats = [](const char* name, const std::vector<double>& v) {
-	//			const double m = mean_val(v);
-	//			std::cout << name << " -> mean ΔE: " << m << "\n";
-	//			};
-
-	//		std::cout << "\n================ ΔE 指标（Lab）评估 (Matrix + Reinhard + Gamma) ================\n";
-	//		print_stats("[ΔE76]  原始状态", dE76_before);
-	//		print_stats("[ΔE76]  阶段1 (Matrix)", dE76_after_M);
-	//		print_stats("[ΔE76]  最终精修 (Final)", dE76_after_Final);
-	//		std::cout << "------------------------------------------------\n";
-
-	//		auto rel_improve = [](double a, double b) { return (a > 1e-9) ? (a - b) / a * 100.0 : 0.0; };
-	//		std::cout << "总改善率 (Overall Improvement: 原始 -> Final): "
-	//			<< rel_improve(mean_val(dE76_before), mean_val(dE76_after_Final)) << "%\n";
-	//		std::cout << "===============================================================================\n";
-	//	}
-	//}
-
 	// 保存结果
 	cv::imwrite("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/corrected_left_cpp.png", targetImage3);
 
+	// 定义变量保存拼接后的图像
+	Mat stitchedImage2(height2, width2 * rate * 2, CV_8UC3);
+	// 左右矩形各一半（各占 rate）
+	Mat leftROI2 = stitchedImage2(Rect(0, 0, width2 * rate, height2));
+	Mat rightROI2 = stitchedImage2(Rect(width2 * rate, 0, width2 * rate, height2));
 
-	//// 定义变量保存拼接后的图像
-	//Mat stitchedImage2(height2, width2 * rate * 2, CV_8UC3);
-	//// 左右矩形各一半（各占 rate）
-	//Mat leftROI2 = stitchedImage2(Rect(0, 0, width2 * rate, height2));
-	//Mat rightROI2 = stitchedImage2(Rect(width2 * rate, 0, width2 * rate, height2));
+	targetImage3(Rect(0, 0, width2 * rate, height2)).copyTo(leftROI2);
+	targetImage4(Rect(width2 * (1.0 - rate), 0, width2 * rate, height2)).copyTo(rightROI2);
+	cout << "rgb图片拼接完成" << endl;
 
-	//targetImage3(Rect(0, 0, width2 * rate, height2)).copyTo(leftROI2);
-	//targetImage4(Rect(width2 * (1.0 - rate), 0, width2 * rate, height2)).copyTo(rightROI2);
-	//cout << "rgb图片拼接完成" << endl;
-
-	//// 继续后续的旋转和保存操作...
-	//stitchedImage2 = RGB90right(stitchedImage2);
-	//cv::imwrite("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/stitchedImage2.png", stitchedImage2);
+	// 继续后续的旋转和保存操作...
+	stitchedImage2 = RGB90right(stitchedImage2);
+	cv::imwrite("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/stitchedImage2.png", stitchedImage2);
 
 	cout << "开始处理曲面" << endl;
 
@@ -707,20 +1168,30 @@
 			int right_y = static_cast<int>(right_uv.y + width2 * rate - rx);
 			circle(debugTransition, Point(right_x, right_y), 5, Scalar(0, 0, 255), -1); // 右投影点：蓝色
 
-			// 3. 计算混合权重
+			// ===== 【论文代码补全】依据 Eq.9 的余弦平滑过渡 (Cosine Blending) =====
 			const float transition_y = -60.0f;
-			const float transition_width = 5.0f;
+			const float transition_width = 5.0f; 
 			float dist_to_seam = point.y - transition_y;
 			float blend_weight = 0.0f;
-			if (dist_to_seam < -transition_width) {
-				blend_weight = 1.0f;
+			
+			if (dist_to_seam <= -transition_width) {
+				blend_weight = 1.0f; // 处于边界左侧，完全使用左图权重
 			}
-			else if (dist_to_seam > transition_width) {
-				blend_weight = 0.0f;
+			else if (dist_to_seam >= transition_width) {
+				blend_weight = 0.0f; // 处于边界右侧，完全使用右图权重
 			}
 			else {
-				blend_weight = 1.0f - (dist_to_seam + transition_width) / (2 * transition_width);
+				// 计算归一化距离 d(p) ∈ [0, 1]
+				float d_p = (dist_to_seam + transition_width) / (2.0f * transition_width);
+				
+				// 依据 Eq.9: w(p) = 0.5 * (1 - cos(pi * d(p)))
+				// d_p 从 0->1 时，w_p 从 0->1 非线性平滑过渡
+				float w_p = 0.5f * (1.0f - std::cos(CV_PI * d_p)); 
+				
+				// 因为原逻辑中 blend_weight=1 代表全左脸，所以左脸权重为 1 - w_p
+				blend_weight = 1.0f - w_p; 
 			}
+			// ===== 余弦平滑过渡计算结束 =====
 
 			// 4. 获取左右脸原始颜色
 			Vec3b left_color = stitchedImage2.at<Vec3b>(
@@ -810,79 +1281,6 @@
 
 	imwrite("DataSave/OrgData/transition_debug.png", debugTransition);
 
-	//// ============= 直方图匹配：替换你的色彩校正（可直接粘贴替换）=============
- //  // 方式A（推荐）：先构建 LUT，再整图应用，同时生成逐点评估颜色
-	//std::array<uchar, 256> lutL, lutA, lutB;
-	//build_lab_LUTs_from_samples(filteredLeftFeatures, filteredRightFeatures, lutL, lutA, lutB);
-
-	//// 1) 整幅左图做直方图匹配（Lab 三通道，基于样本的目标分布）
-	//cv::Mat corrected_left = hist_match_image_lab_from_samples(targetImage3, filteredLeftFeatures, filteredRightFeatures);
-	//targetImage3 = corrected_left.clone(); // 覆盖左图，后续流程保持不变
-
-	//// 2) 用同一 LUT 逐点生成“变换后的左侧颜色”，用于你后续的误差/ΔE 评估
-	//std::vector<cv::Vec3b> transformedFeatures;
-	//transformedFeatures.reserve(filteredLeftFeatures.size());
-	//for (size_t i = 0; i < filteredLeftFeatures.size(); ++i) {
-	//	transformedFeatures.push_back(
-	//		hist_match_point_from_samples(filteredLeftFeatures[i], lutL, lutA, lutB)
-	//	);
-	//}
-
-	//// 3) （可选）你原有的颜色差/ΔE 评估可直接复用，示例：平均 BGR 欧氏差
-	//float transformedMeanDiff = 0.0f;
-	//for (size_t i = 0; i < filteredLeftFeatures.size(); ++i) {
-	//	const cv::Vec3b& tl = transformedFeatures[i];
-	//	const cv::Vec3b& rr = filteredRightFeatures[i];
-	//	float d = std::sqrt(
-	//		std::pow(float(tl[0]) - rr[0], 2) +
-	//		std::pow(float(tl[1]) - rr[1], 2) +
-	//		std::pow(float(tl[2]) - rr[2], 2)
-	//	);
-	//	transformedMeanDiff += d;
-	//}
-	//transformedMeanDiff /= static_cast<float>(filteredLeftFeatures.size());
-	//std::cout << "[HistMatch] 变换后平均颜色差: " << transformedMeanDiff << std::endl;
-	//// ============= 直方图匹配：替换区结束 =============
-
-	// ========== Reinhard 色彩传递替换区 ==========
-// // —— 替换区：用“整图统计”做 Reinhard 矫正 —— //
-	//cv::Vec3f muLeft, stdLeft, muRight, stdRight;
-
-	//// 若你只想用某个 ROI 统计，可传 roi；或传入 mask 仅统计人脸区域
-	//// 这里按“整张图”统计：
-	//meanStdLab_from_image(targetImage3, muLeft, stdLeft);
-	//meanStdLab_from_image(targetImage4, muRight, stdRight);
-
-	//// 把左图整体映射到右图的均值/方差
-	//cv::Mat corrected_left = reinhard_transfer_image_BGR(
-	//	targetImage3, muLeft, stdLeft, muRight, stdRight
-	//);
-	//targetImage3 = corrected_left.clone(); // 覆盖左图，后续流程（拼接/验证/ΔE）保持不变
-
-	////// 3) 生成逐点评估用的变换后颜色
-	////std::vector<cv::Vec3b> transformedFeatures;
-	//transformedFeatures.reserve(filteredLeftFeatures.size());
-	//for (size_t i = 0; i < filteredLeftFeatures.size(); ++i) {
-	//	transformedFeatures.push_back(
-	//		reinhard_transfer_color_BGR(filteredLeftFeatures[i], muLeft, stdLeft, muRight, stdRight)
-	//	);
-	//}
-
-	//// 4) 变换后均值差
-	//transformedMeanDiff = 0.0f;
-	////float transformedMeanDiff = 0.0f;
-	//for (size_t i = 0; i < filteredLeftFeatures.size(); ++i) {
-	//	const cv::Vec3b& transLeft = transformedFeatures[i];
-	//	const cv::Vec3b& targetRight = filteredRightFeatures[i];
-	//	float diff = std::sqrt(
-	//		std::pow(float(transLeft[0]) - targetRight[0], 2) +
-	//		std::pow(float(transLeft[1]) - targetRight[1], 2) +
-	//		std::pow(float(transLeft[2]) - targetRight[2], 2)
-	//	);
-	//	transformedMeanDiff += diff;
-	//}
-	//transformedMeanDiff /= static_cast<float>(filteredLeftFeatures.size());
-	//std::cout << "\n[Reinhard] 变换后平均颜色差: " << transformedMeanDiff << std::endl;
 	// ========== Reinhard 色彩传递替换区 ==========
 
 	// =============== 打印详细的颜色信息（同时显示两次校正） ===============
@@ -1019,98 +1417,6 @@
 		}
 	}
 
-
-	//// 打印详细的颜色信息（仅显示筛选后的点）
-	//std::cout << "\n特征点颜色对比 (格式: BGR):" << std::endl;
-	//std::cout << "索引 | 原始颜色差异 | 变换后颜色差异 | 左脸原始BGR | 左脸变换后BGR | 右脸目标BGR" << std::endl;
-	//std::cout << "----------------------------------------------------------------------------------------------------------------" << std::endl;
-	//for (size_t i = 0; i < filteredLeftFeatures.size(); i++)
-	//{
-	//	int idx = filteredIndices[i];
-	//	cv::Vec3b origLeft = filteredLeftFeatures[i];
-	//	cv::Vec3b transLeft = transformedFeatures[i];
-	//	cv::Vec3b targetRight = filteredRightFeatures[i];
-	//	float origDiff = colorDiffs[filteredIndices[i] - 20];
-
-	//	float transDiff = std::sqrt(
-	//		std::pow(transLeft[0] - targetRight[0], 2) +
-	//		std::pow(transLeft[1] - targetRight[1], 2) +
-	//		std::pow(transLeft[2] - targetRight[2], 2)
-	//	);
-
-	//	std::printf("%2d | %10.1f | %10.1f | (%3d,%3d,%3d) | (%3d,%3d,%3d) | (%3d,%3d,%3d)\n",
-	//		idx,
-	//		origDiff,
-	//		transDiff,
-	//		origLeft[0], origLeft[1], origLeft[2],
-	//		transLeft[0], transLeft[1], transLeft[2],
-	//		targetRight[0], targetRight[1], targetRight[2]);
-	//}
-
-	//// ===== ΔE 评估（新增，不改动既有流程）=====
-	//{
-	//	if (filteredLeftFeatures.empty() || filteredRightFeatures.empty() ||
-	//		filteredLeftFeatures.size() != filteredRightFeatures.size() ||
-	//		transformedFeatures.size() != filteredRightFeatures.size()) {
-	//		std::cout << "[ΔE] 可用样本不足或大小不匹配，跳过 ΔE 评估。\n";
-	//	}
-	//	else {
-	//		const size_t N = filteredLeftFeatures.size();
-	//		std::vector<double> dE76_before, dE76_after, dE00_before, dE00_after;
-	//		dE76_before.reserve(N); dE76_after.reserve(N);
-	//		dE00_before.reserve(N); dE00_after.reserve(N);
-
-	//		for (size_t i = 0; i < N; ++i) {
-	//			// BGR->Lab
-	//			cv::Vec3f LabL = BGR2Lab32f(filteredLeftFeatures[i]);
-	//			cv::Vec3f LabR = BGR2Lab32f(filteredRightFeatures[i]);
-	//			cv::Vec3f LabLt = BGR2Lab32f(transformedFeatures[i]);
-
-	//			// ΔE76 & ΔE2000 : Before (原始左 vs 右) / After (变换后左 vs 右)
-	//			dE76_before.push_back(deltaE76(LabL, LabR));
-	//			dE76_after.push_back(deltaE76(LabLt, LabR));
-	//			dE00_before.push_back(deltaE2000(LabL, LabR));
-	//			dE00_after.push_back(deltaE2000(LabLt, LabR));
-	//		}
-
-	//		auto print_stats = [](const char* name, const std::vector<double>& v) {
-	//			std::vector<double> tmp = v;
-	//			const double m = mean_val(v);
-	//			const double md = median(std::move(tmp));
-	//			std::vector<double> t90 = v, t95 = v;
-	//			const double p90 = percentile(std::move(t90), 90.0);
-	//			const double p95 = percentile(std::move(t95), 95.0);
-
-	//			size_t c1 = 0, c2 = 0, c3 = 0;
-	//			for (double x : v) { if (x <= 1.0) ++c1; if (x <= 2.0) ++c2; if (x <= 3.0) ++c3; }
-	//			const double n = static_cast<double>(v.size());
-
-	//			std::cout << name << " -> "
-	//				<< "mean: " << m
-	//				<< ", median: " << md
-	//				<< ", P90: " << p90
-	//				<< ", P95: " << p95
-	//				<< ", ≤1: " << (c1 / n * 100.0) << "%, "
-	//				<< "≤2: " << (c2 / n * 100.0) << "%, "
-	//				<< "≤3: " << (c3 / n * 100.0) << "%\n";
-	//			};
-
-	//		std::cout << "\n================ ΔE 指标（Lab） ================\n";
-	//		std::cout << "[ΔE76]  原始(左vs右): ";  print_stats("before", dE76_before);
-	//		std::cout << "[ΔE76]  校正(左'vs右): "; print_stats("after ", dE76_after);
-	//		std::cout << "[ΔE2000]原始(左vs右): ";  print_stats("before", dE00_before);
-	//		std::cout << "[ΔE2000]校正(左'vs右): "; print_stats("after ", dE00_after);
-
-	//		auto rel_improve = [](double a, double b) { return (a > 1e-9) ? (a - b) / a * 100.0 : 0.0; };
-	//		std::cout << "------------------------------------------------\n";
-	//		std::cout << "ΔE76  mean 改善(↓%)："
-	//			<< rel_improve(mean_val(dE76_before), mean_val(dE76_after)) << "%\n";
-	//		std::cout << "ΔE2000 mean 改善(↓%)："
-	//			<< rel_improve(mean_val(dE00_before), mean_val(dE00_after)) << "%\n";
-	//		std::cout << "================================================\n";
-	//	}
-	//}
-
 	// 保存结果
 	cv::imwrite("C:/Users/tester/Desktop/FaceStitche_QT/FaceStitche/DataSave/OrgData/corrected_left_cpp.png", targetImage3);
 
@@ -1207,20 +1513,30 @@
 			int right_y = static_cast<int>(right_uv.y + width2 * rate - rx);
 			circle(debugTransition, Point(right_x, right_y), 5, Scalar(0, 0, 255), -1); // 右投影点：蓝色
 
-			// 3. 计算混合权重
+			// ===== 【论文代码补全】依据 Eq.9 的余弦平滑过渡 (Cosine Blending) =====
 			const float transition_y = -60.0f;
-			const float transition_width = 5.0f;
+			const float transition_width = 5.0f; 
 			float dist_to_seam = point.y - transition_y;
 			float blend_weight = 0.0f;
-			if (dist_to_seam < -transition_width) {
-				blend_weight = 1.0f;
+			
+			if (dist_to_seam <= -transition_width) {
+				blend_weight = 1.0f; // 处于边界左侧，完全使用左图权重
 			}
-			else if (dist_to_seam > transition_width) {
-				blend_weight = 0.0f;
+			else if (dist_to_seam >= transition_width) {
+				blend_weight = 0.0f; // 处于边界右侧，完全使用右图权重
 			}
 			else {
-				blend_weight = 1.0f - (dist_to_seam + transition_width) / (2 * transition_width);
+				// 计算归一化距离 d(p) ∈ [0, 1]
+				float d_p = (dist_to_seam + transition_width) / (2.0f * transition_width);
+				
+				// 依据 Eq.9: w(p) = 0.5 * (1 - cos(pi * d(p)))
+				// d_p 从 0->1 时，w_p 从 0->1 非线性平滑过渡
+				float w_p = 0.5f * (1.0f - std::cos(CV_PI * d_p)); 
+				
+				// 因为原逻辑中 blend_weight=1 代表全左脸，所以左脸权重为 1 - w_p
+				blend_weight = 1.0f - w_p; 
 			}
+			// ===== 余弦平滑过渡计算结束 =====
 
 			// 4. 获取左右脸原始颜色
 			Vec3b left_color = stitchedImage2.at<Vec3b>(
