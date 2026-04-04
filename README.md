@@ -1,6 +1,6 @@
 # Geometry-Driven Color Consistency and Texture Blending for High-Fidelity 3D Face Reconstruction
 
-**📌 IMPORTANT NOTE:** This repository contains the core implementation code directly related to the manuscript submitted to **The Visual Computer**. 
+**📌 IMPORTANT NOTE:** This repository contains the core implementation code directly related to the manuscript submitted to **Computers & Graphics**. 
 If you find this codebase helpful for your research, please consider citing our paper (complete citation information will be updated upon formal publication).
 
 ## Overview
