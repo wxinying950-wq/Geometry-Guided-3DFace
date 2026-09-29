@@ -1,0 +1,9 @@
+# Generated CMake and Visual Studio files
+Code/cpp/build/
+Code/cpp/build-*/
+
+# Local editor and operating-system files
+.vs/
+*.user
+Thumbs.db
+Desktop.ini
